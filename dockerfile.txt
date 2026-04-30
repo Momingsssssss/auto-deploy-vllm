@@ -1,0 +1,110 @@
+# Stage 1: 安装 Python
+FROM ubuntu:22.04 AS python-installer
+ENV PATH=/usr/local/python3.10.20/bin:${PATH}
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+        libffi-dev libnss3-dev libgdbm-dev liblzma-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装系统 Python（免编译，快速）
+RUN apt-get update && apt-get install -y python3 python3-pip python3-dev python3-distutils \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3 1 \
+    && update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+
+# -----------------------------------------------------------------------------
+# Stage 2: 安装 CANN（继承 Stage1 的结果！）
+# -----------------------------------------------------------------------------
+FROM python-installer AS cann-installer
+
+ARG ARCH=aarch64
+ARG DEVICE=910b
+ARG CANN_VERSION=8.5.1
+
+# 安装依赖
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    git wget gcc g++ make cmake libblas-dev gfortran patchelf cpio libaio-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 离线复制 CANN 包
+COPY CANN/Ascend-cann-toolkit_${CANN_VERSION}_linux-${ARCH}.run /tmp/
+COPY CANN/Ascend-cann-${DEVICE}-ops_${CANN_VERSION}_linux-${ARCH}.run /tmp/
+COPY CANN/Ascend-cann-nnal_${CANN_VERSION}_linux-${ARCH}.run /tmp/
+
+# 安装 Toolkit
+RUN chmod +x /tmp/Ascend-cann-toolkit_*.run \
+    && /tmp/Ascend-cann-toolkit_*.run --quiet --install --install-for-all \
+    && rm -f /tmp/Ascend-cann-toolkit_*.run
+
+# 安装 Ops
+RUN chmod +x /tmp/Ascend-cann-*ops*.run \
+    && /tmp/Ascend-cann-*ops*.run --quiet --install --install-for-all \
+    && rm -f /tmp/Ascend-cann-*ops*.run
+
+# 安装 NNAL
+RUN . /usr/local/Ascend/ascend-toolkit/set_env.sh \
+    && chmod +x /tmp/Ascend-cann-nnal_*.run \
+    && /tmp/Ascend-cann-nnal_*.run --quiet --install --install-for-all \
+    && rm -f /tmp/Ascend-cann-nnal_*.run
+
+# -----------------------------------------------------------------------------
+# Stage 3: 最终镜像 —— ✅ 正确写法：继承自 cann-installer
+# -----------------------------------------------------------------------------
+FROM cann-installer AS final
+
+# 环境变量
+ARG SOC_VERSION="ascend910b1"
+ENV DEBIAN_FRONTEND=noninteractive
+ENV SOC_VERSION=$SOC_VERSION \
+    TASK_QUEUE_ENABLE=1 \
+    OMP_NUM_THREADS=1
+
+WORKDIR /workspace
+
+# 安装工具链
+RUN apt-get update -y && \
+    apt-get install -y git vim wget net-tools gcc g++ cmake numactl libnuma-dev libjemalloc2 clang-15 && \
+    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20 && \
+    rm -rf /var/cache/apt/* && rm -rf /var/lib/apt/lists/*
+
+COPY auto/vllm-ascend.tar.gz /tmp/
+RUN mkdir -p /vllm-workspace/vllm-ascend && \
+    tar -xzf /tmp/vllm-ascend.tar.gz -C /vllm-workspace/vllm-ascend --strip-components=1 && \
+    cd /vllm-workspace/vllm-ascend && git checkout v0.18.0rc1
+# 安装 Mooncake
+COPY auto/Mooncake.tar.gz /tmp/
+RUN mkdir -p /vllm-workspace/Mooncake && \
+    tar -xzf /tmp/Mooncake.tar.gz -C /vllm-workspace/Mooncake --strip-components=1 && \
+    cp /vllm-workspace/vllm-ascend/tools/mooncake_installer.sh /vllm-workspace/Mooncake && \
+    cd /vllm-workspace/Mooncake && git checkout v0.3.9 && bash mooncake_installer.sh -y && \
+    ARCH=$(uname -m) && \
+    . /usr/local/Ascend/ascend-toolkit/set_env.sh && \
+    export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/${ARCH}-linux/devlib:/usr/local/Ascend/ascend-toolkit/latest/${ARCH}-linux/lib64:$LD_LIBRARY_PATH && \
+    mkdir -p build && cd build && cmake .. -DUSE_ASCEND_DIRECT=ON && \
+    make -j$(nproc) && make install
+
+# 安装 Python 依赖
+RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
+    python3 -m pip install modelscope ray>=2.47.1 protobuf>3.20.0
+
+# 离线安装 vLLM
+COPY auto/vllm-v0.18.0.tar.gz /tmp/
+RUN mkdir -p /vllm-workspace/vllm && \
+    tar -xzf /tmp/vllm-v0.18.0.tar.gz -C /vllm-workspace/vllm --strip-components=1 && \
+    cd /vllm-workspace/vllm && git checkout v0.18.0 && \
+    VLLM_TARGET_DEVICE="empty" python3 -m pip install -v -e /vllm-workspace/vllm/[audio] && \
+    python3 -m pip uninstall -y triton
+
+# 安装 vllm-ascend
+COPY . /vllm-workspace/vllm-ascend/
+RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh && \
+    source /usr/local/Ascend/nnal/atb/set_env.sh && \
+    python3 -m pip install -v -e /vllm-workspace/vllm-ascend/ && \
+    python3 -m pip install -v triton-ascend==3.2.0
+
+# 环境变量
+RUN echo "export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2" >> ~/.bashrc
+
+CMD ["/bin/bash"]

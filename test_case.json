@@ -1,0 +1,103 @@
+[
+  {
+    "id": "01_basic_hello",
+    "name": "基础: 简单问候",
+    "prompt": "你好，请只回答'你好'这两个字。",
+    "tools": [],
+    "expected_check": "contains:你好"
+  },
+  {
+    "id": "02_function_single_tool",
+    "name": "工具: 单工具调用(天气)",
+    "prompt": "上海明天会下雨吗？",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "获取指定城市的天气信息",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": { "type": "string", "description": "城市名称" }
+            },
+            "required": ["location"]
+          }
+        }
+      }
+    ],
+    "expected_check": "tool_call:get_weather"
+  },
+  {
+    "id": "03_function_multi_tools",
+    "name": "工具: 多工具选择(股票 vs 天气)",
+    "prompt": "我想买苹果公司的股票，现在的股价是多少？",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_stock_price",
+          "description": "获取特定公司的实时股票价格",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "symbol": { "type": "string", "description": "股票代码或公司名称" }
+            },
+            "required": ["symbol"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_web",
+          "description": "在搜索引擎中查找通用信息",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": { "type": "string", "description": "搜索关键词" }
+            },
+            "required": ["query"]
+          }
+        }
+      }
+    ],
+    "expected_check": "tool_call:get_stock_price"
+  },
+  {
+    "id": "04_logic_math",
+    "name": "逻辑: 数学应用题",
+    "prompt": "如果我有 5 个苹果，吃了 2 个，又买了 3 个，现在我有多少个苹果？请直接给出数字。",
+    "tools": [],
+    "expected_check": "contains:6"
+  },
+  {
+    "id": "05_coding_python",
+    "name": "代码: Python 生成",
+    "prompt": "请用 Python 写一个函数来计算斐波那契数列的第 n 项。",
+    "tools": [],
+    "expected_check": "contains:def"
+  },
+  {
+    "id": "06_format_json",
+    "name": "格式: JSON 模式",
+    "prompt": "提取以下信息的姓名和年龄：张三，28岁。请以纯 JSON 格式返回，不要包含 markdown 标记。",
+    "tools": [],
+    "response_format": "json_object",
+    "expected_check": "is_json"
+  },
+  {
+    "id": "07_knowledge_fact",
+    "name": "知识: 事实性问答",
+    "prompt": "中国的首都是哪里？",
+    "tools": [],
+    "expected_check": "contains:北京"
+  },
+  {
+    "id": "08_format_markdown",
+    "name": "格式: Markdown 表格",
+    "prompt": "列出前三种水果及其颜色的对比表格。",
+    "tools": [],
+    "expected_check": "contains:|"
+  }
+]
